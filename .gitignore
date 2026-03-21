@@ -23,3 +23,5 @@ compile_commands.json
 
 *.log
 *.tmp
+
+delete/

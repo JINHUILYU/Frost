@@ -1,664 +1,591 @@
 import AppKit
-import CoreServices
-import CoreGraphics
-import ApplicationServices
+
+final class FlippedContainerView: NSView {
+    override var isFlipped: Bool { true }
+}
+
+final class VisibilityStore {
+    private let hiddenBundleDefaultsKey = "FrostBar.HiddenBundleIDs"
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    func hiddenBundleIDs() -> Set<String> {
+        let values = defaults.array(forKey: hiddenBundleDefaultsKey) as? [String] ?? []
+        return Set(values)
+    }
+
+    func isVisible(bundleID: String) -> Bool {
+        !hiddenBundleIDs().contains(bundleID)
+    }
+
+    func setVisible(_ isVisible: Bool, for bundleID: String) {
+        var hidden = hiddenBundleIDs()
+        if isVisible {
+            hidden.remove(bundleID)
+        } else {
+            hidden.insert(bundleID)
+        }
+        defaults.set(Array(hidden).sorted(), forKey: hiddenBundleDefaultsKey)
+    }
+}
 
 private struct ListedAppEntry {
-	let displayApp: NSRunningApplication
-	let activationApp: NSRunningApplication
-
-	var displayName: String {
-		displayApp.localizedName ?? displayApp.bundleIdentifier ?? "Unknown App"
-	}
+    let app: NSRunningApplication
+    let displayName: String
+    let bundleID: String
+    let icon: NSImage?
 }
 
 final class AppActivationTarget: NSObject {
-	let activationPID: pid_t
-	let activationBundleIdentifier: String?
-	let activationBundleURL: URL?
-	let activationDisplayName: String
-	let displayName: String
+    let pid: pid_t
+    let bundleID: String
+    let bundleURL: URL?
+    let appName: String
 
-	init(displayApp: NSRunningApplication, activationApp: NSRunningApplication) {
-		self.activationPID = activationApp.processIdentifier
-		self.activationBundleIdentifier = activationApp.bundleIdentifier
-		self.activationBundleURL = activationApp.bundleURL
-		self.activationDisplayName = activationApp.localizedName ?? activationApp.bundleIdentifier ?? ""
-		self.displayName = displayApp.localizedName ?? displayApp.bundleIdentifier ?? "Unknown App"
-	}
+    init(app: NSRunningApplication, bundleID: String) {
+        self.pid = app.processIdentifier
+        self.bundleID = bundleID
+        self.bundleURL = app.bundleURL
+        self.appName = app.localizedName ?? bundleID
+    }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-	private var statusItem: NSStatusItem?
-	private let dynamicItemTag = 9001
-	private let emptyItemTag = 9002
-	private let helperKeywords = ["helper", "daemon", "agent", "plugin", "service", "renderer", "gpu", "crashpad"]
-	private let subAppKeywords = ["小程序", "miniapp", "mini app"]
-	private let excludedBundleSubstrings = [
-		"com.tencent.flue.weapp",
-		"com.tencent.flue.helper",
-		"com.apple.appkit.xpc.openandsavepanelservice",
-		"com.apple.quicklook.quicklookuiservice",
-		"com.apple.safariplatformsupport.helper",
-		"com.microsoft.sharepoint-mac"
-	]
-	private let excludedBundlePrefixes = ["com.apple."]
-	private let excludedBundleIdentifiers = Set([
-		"com.apple.finder",
-		"com.apple.controlcenter",
-		"com.apple.systemuiserver",
-		"com.apple.notificationcenterui"
-	])
-	private let maxMenuItems = 40
-
-	func applicationDidFinishLaunching(_ notification: Notification) {
-		let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-		item.button?.title = "FrostBar"
-
-		let menu = NSMenu()
-		menu.delegate = self
-
-		let empty = NSMenuItem(title: "No candidate apps", action: nil, keyEquivalent: "")
-		empty.tag = emptyItemTag
-		empty.isHidden = true
-		menu.addItem(empty)
-
-		menu.addItem(NSMenuItem.separator())
-		menu.addItem(
-			withTitle: "Quit FrostBar",
-			action: #selector(quitApp),
-			keyEquivalent: "q"
-		)
-		menu.items.last?.target = self
-		item.menu = menu
-
-		self.statusItem = item
-		refreshMenuBarAppList()
-	}
-
-	func menuWillOpen(_ menu: NSMenu) {
-		refreshMenuBarAppList()
-	}
-
-	@objc private func refreshMenuBarAppList() {
-		guard let menu = statusItem?.menu else {
-			return
-		}
-
-		removeDynamicAppItems(from: menu)
-
-		let entries = discoverMenuBarCandidateApps()
-
-		if entries.isEmpty {
-			menu.item(withTag: emptyItemTag)?.isHidden = false
-			return
-		}
-
-		menu.item(withTag: emptyItemTag)?.isHidden = true
-		let anchorIndex = 0
-		let nameCounts = Dictionary(grouping: entries, by: { $0.displayName })
-		var nameOffsets: [String: Int] = [:]
-
-		for (offset, entry) in entries.enumerated() {
-			let baseName = entry.displayName
-			let total = nameCounts[baseName]?.count ?? 1
-			let current = (nameOffsets[baseName] ?? 0) + 1
-			nameOffsets[baseName] = current
-			let name = total > 1 ? "\(baseName) (\(current))" : baseName
-			let listItem = NSMenuItem(title: name, action: #selector(activateListedApp(_:)), keyEquivalent: "")
-			listItem.tag = dynamicItemTag
-			listItem.target = self
-			listItem.representedObject = AppActivationTarget(displayApp: entry.displayApp, activationApp: entry.activationApp)
-			if let icon = entry.displayApp.icon {
-				let sizedIcon = icon.copy() as? NSImage ?? icon
-				sizedIcon.size = NSSize(width: 16, height: 16)
-				listItem.image = sizedIcon
-			}
-			menu.insertItem(listItem, at: anchorIndex + offset)
-		}
-	}
-
-	@objc private func activateListedApp(_ sender: NSMenuItem) {
-		guard let targetInfo = sender.representedObject as? AppActivationTarget else {
-			return
-		}
-
-		let family = appFamily(bundleID: targetInfo.activationBundleIdentifier, appName: targetInfo.activationDisplayName)
-
-		if activateRunningApp(pid: targetInfo.activationPID) {
-			_ = forceAggressiveFrontmost(pid: targetInfo.activationPID)
-			_ = focusWindowViaAccessibility(pid: targetInfo.activationPID)
-			_ = raiseFrontWindowIfNeeded(pid: targetInfo.activationPID)
-			if let bundleID = targetInfo.activationBundleIdentifier {
-				if shouldReopenForFamily(family) {
-					_ = reopenByAppleScript(bundleIdentifier: bundleID)
-				}
-				_ = activateByAppleScript(bundleIdentifier: bundleID)
-				_ = activateByWorkspace(bundleIdentifier: bundleID)
-				_ = forceAggressiveFrontmost(pid: targetInfo.activationPID)
-				_ = focusWindowViaAccessibility(pid: targetInfo.activationPID)
-				_ = raiseFrontWindowIfNeeded(pid: targetInfo.activationPID)
-				if family == .onedrive {
-					_ = reopenByAppleScript(bundleIdentifier: bundleID)
-				}
-			}
-			if !targetInfo.activationDisplayName.isEmpty {
-				_ = activateByAppleScript(appName: targetInfo.activationDisplayName)
-				if family == .onedrive {
-					_ = activateByAppleScript(appName: "OneDrive")
-				}
-			}
-			_ = activateFamilyFallback(family: family, bundleIdentifier: targetInfo.activationBundleIdentifier, appName: targetInfo.activationDisplayName)
-			return
-		}
-
-		if let bundleID = targetInfo.activationBundleIdentifier,
-		   activateByBundleIdentifier(bundleID, preferredPID: targetInfo.activationPID),
-		   let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-			.filter({ !$0.isTerminated })
-			.max(by: { score(for: $0) < score(for: $1) }) {
-			_ = focusWindowViaAccessibility(pid: app.processIdentifier)
-			_ = raiseFrontWindowIfNeeded(pid: app.processIdentifier)
-			if !targetInfo.activationDisplayName.isEmpty {
-				_ = activateByAppleScript(appName: targetInfo.activationDisplayName)
-			}
-			_ = activateFamilyFallback(family: family, bundleIdentifier: targetInfo.activationBundleIdentifier, appName: targetInfo.activationDisplayName)
-			return
-		}
-
-		if let bundleURL = targetInfo.activationBundleURL {
-			let configuration = NSWorkspace.OpenConfiguration()
-			configuration.activates = true
-			NSWorkspace.shared.openApplication(at: bundleURL, configuration: configuration) { _, _ in }
-			_ = activateFamilyFallback(family: family, bundleIdentifier: targetInfo.activationBundleIdentifier, appName: targetInfo.activationDisplayName)
-			return
-		}
-
-		// If no running target can be activated, refresh list and avoid launching stale/non-running entries.
-		refreshMenuBarAppList()
-	}
-
-	private func activateFamilyFallback(family: AppFamily, bundleIdentifier: String?, appName: String?) -> Bool {
-		var changed = false
-
-		if let bundleIdentifier {
-			let instances = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
-				.filter { !$0.isTerminated }
-				.sorted { score(for: $0) > score(for: $1) }
-
-			for app in instances {
-				if activateRunningApp(app: app) {
-					changed = true
-				}
-				if forceAggressiveFrontmost(pid: app.processIdentifier) {
-					changed = true
-				}
-				if focusWindowViaAccessibility(pid: app.processIdentifier) {
-					changed = true
-				}
-			}
-
-			switch family {
-			case .wechat, .v2ray, .quark, .uu:
-				if reopenByAppleScript(bundleIdentifier: bundleIdentifier) {
-					changed = true
-				}
-			default:
-				break
-			}
-
-			if activateByAppleScript(bundleIdentifier: bundleIdentifier) {
-				changed = true
-			}
-		}
-
-		if let appName, !appName.isEmpty {
-			switch family {
-			case .wechat, .v2ray, .quark, .uu:
-				if reopenByAppleScript(appName: appName) {
-					changed = true
-				}
-			default:
-				break
-			}
-
-			if activateByAppleScript(appName: appName) {
-				changed = true
-			}
-		}
-
-		return changed
-	}
-
-	private func activateRunningApp(pid: pid_t) -> Bool {
-		guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else {
-			return false
-		}
-
-		return activateRunningApp(app: app)
-	}
-
-	private func activateRunningApp(app: NSRunningApplication) -> Bool {
-		if app.isTerminated {
-			return false
-		}
-
-		app.unhide()
-		if #available(macOS 14.0, *) {
-			if app.activate(options: [.activateAllWindows]) {
-				return true
-			}
-		} else {
-			if app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps]) {
-				return true
-			}
-		}
-
-		return app.activate(options: [])
-	}
-
-	private func activateByBundleIdentifier(_ bundleID: String, preferredPID: pid_t?) -> Bool {
-		let runningInstances = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-			.filter { !$0.isTerminated }
-		let family = appFamily(bundleID: bundleID, appName: runningInstances.first?.localizedName)
-
-		if let best = pickBestRunningInstance(bundleIdentifier: bundleID, preferredPID: preferredPID),
-		   activateRunningApp(app: best) {
-			_ = forceAggressiveFrontmost(pid: best.processIdentifier)
-			_ = focusWindowViaAccessibility(pid: best.processIdentifier)
-			_ = forceFrontmostIfNeeded(pid: best.processIdentifier)
-			if shouldReopenForFamily(family) {
-				_ = reopenByAppleScript(bundleIdentifier: bundleID)
-			}
-			_ = activateByAppleScript(bundleIdentifier: bundleID)
-			_ = activateByWorkspace(bundleIdentifier: bundleID)
-			return true
-		}
-
-		if !runningInstances.isEmpty {
-			return activateByAppleScript(bundleIdentifier: bundleID)
-		}
-
-		return false
-	}
-
-	private func pickBestRunningInstance(bundleIdentifier: String, preferredPID: pid_t?) -> NSRunningApplication? {
-		let candidates = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
-			.filter { !$0.isTerminated }
-
-		if let preferredPID, let preferred = candidates.first(where: { $0.processIdentifier == preferredPID }) {
-			return preferred
-		}
-
-		return candidates.max { lhs, rhs in
-			score(for: lhs) < score(for: rhs)
-		}
-	}
-
-	private func activateByAppleScript(bundleIdentifier: String) -> Bool {
-		var errorInfo: NSDictionary?
-		let script = NSAppleScript(source: "tell application id \"\(bundleIdentifier)\" to activate")
-		_ = script?.executeAndReturnError(&errorInfo)
-		return errorInfo == nil
-	}
-
-	private func reopenByAppleScript(bundleIdentifier: String) -> Bool {
-		var errorInfo: NSDictionary?
-		let script = NSAppleScript(source: "tell application id \"\(bundleIdentifier)\" to reopen")
-		_ = script?.executeAndReturnError(&errorInfo)
-		return errorInfo == nil
-	}
-
-	private func reopenByAppleScript(appName: String) -> Bool {
-		var errorInfo: NSDictionary?
-		let script = NSAppleScript(source: "tell application \"\(appName)\" to reopen")
-		_ = script?.executeAndReturnError(&errorInfo)
-		return errorInfo == nil
-	}
-
-	private func activateByAppleScript(appName: String) -> Bool {
-		var errorInfo: NSDictionary?
-		let script = NSAppleScript(source: "tell application \"\(appName)\" to activate")
-		_ = script?.executeAndReturnError(&errorInfo)
-		return errorInfo == nil
-	}
-
-	private func activateByWorkspace(bundleIdentifier: String) -> Bool {
-		guard let url = appURLForBundleIdentifier(bundleIdentifier) else {
-			return false
-		}
-
-		let configuration = NSWorkspace.OpenConfiguration()
-		configuration.activates = true
-		NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, _ in }
-		return true
-	}
-
-	private func raiseFrontWindowIfNeeded(pid: pid_t) -> Bool {
-		var errorInfo: NSDictionary?
-		let script = NSAppleScript(source: "tell application \"System Events\"\n  tell (first process whose unix id is \(pid))\n    if (count of windows) > 0 then\n      try\n        perform action \"AXRaise\" of window 1\n      end try\n    end if\n    set frontmost to true\n  end tell\nend tell")
-		_ = script?.executeAndReturnError(&errorInfo)
-		return errorInfo == nil
-	}
-
-	private func forceAggressiveFrontmost(pid: pid_t) -> Bool {
-		guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else {
-			return false
-		}
-
-		app.unhide()
-		if app.activate(options: [.activateIgnoringOtherApps, .activateAllWindows]) {
-			return true
-		}
-
-		return app.activate(options: [.activateIgnoringOtherApps])
-	}
-
-	private func focusWindowViaAccessibility(pid: pid_t) -> Bool {
-		let appElement = AXUIElementCreateApplication(pid)
-		var ok = false
-
-		let frontSet = AXUIElementSetAttributeValue(
-			appElement,
-			kAXFrontmostAttribute as CFString,
-			kCFBooleanTrue
-		)
-
-		if frontSet == .success {
-			ok = true
-		}
-
-		var focusedWindow: CFTypeRef?
-		let focusedResult = AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &focusedWindow)
-		if focusedResult == .success, let focusedWindow {
-			let windowElement = focusedWindow as! AXUIElement
-			if AXUIElementPerformAction(windowElement, kAXRaiseAction as CFString) == .success {
-				ok = true
-			}
-		}
-
-		return ok
-	}
-
-	private func forceFrontmostIfNeeded(pid: pid_t) -> Bool {
-		var errorInfo: NSDictionary?
-		let script = NSAppleScript(source: "tell application \"System Events\"\n  tell (first process whose unix id is \(pid))\n    set frontmost to true\n  end tell\nend tell")
-		_ = script?.executeAndReturnError(&errorInfo)
-		return errorInfo == nil
-	}
-
-	private func appURLForBundleIdentifier(_ bundleID: String) -> URL? {
-		guard let unmanaged = LSCopyApplicationURLsForBundleIdentifier(bundleID as CFString, nil),
-		      let urls = unmanaged.takeRetainedValue() as? [URL],
-		      let first = urls.first else {
-			return nil
-		}
-
-		return first
-	}
-
-	private func removeDynamicAppItems(from menu: NSMenu) {
-		for item in menu.items.reversed() where item.tag == dynamicItemTag {
-			menu.removeItem(item)
-		}
-	}
-
-	private func discoverMenuBarCandidateApps() -> [ListedAppEntry] {
-		let candidates = NSWorkspace.shared.runningApplications
-			.filter { app in
-				if app.bundleIdentifier == Bundle.main.bundleIdentifier {
-					return false
-				}
-
-				if app.isTerminated {
-					return false
-				}
-
-				if app.bundleIdentifier == nil || app.localizedName == nil {
-					return false
-				}
-
-				let bundleID = app.bundleIdentifier?.lowercased() ?? ""
-				let appName = app.localizedName?.lowercased() ?? ""
-
-				if excludedBundleIdentifiers.contains(bundleID) {
-					return false
-				}
-
-				if excludedBundlePrefixes.contains(where: { bundleID.hasPrefix($0) }) {
-					return false
-				}
-
-				if excludedBundleSubstrings.contains(where: { bundleID.contains($0) }) {
-					return false
-				}
-
-				if helperKeywords.contains(where: { bundleID.contains($0) || appName.contains($0) }) {
-					return false
-				}
-
-				if subAppKeywords.contains(where: { appName.contains($0) }) {
-					return false
-				}
-
-				// Keep prohibited as fallback because some menu bar apps use it but are user-visible.
-				return app.activationPolicy == .regular || app.activationPolicy == .accessory || app.activationPolicy == .prohibited
-			}
-
-		var mergedGroups: [String: [NSRunningApplication]] = [:]
-		var entries: [ListedAppEntry] = []
-
-		for app in candidates {
-			if let key = mergeGroupKey(for: app) {
-				mergedGroups[key, default: []].append(app)
-			} else {
-				entries.append(ListedAppEntry(displayApp: app, activationApp: app))
-			}
-		}
-
-		for (key, groupApps) in mergedGroups {
-			guard let activation = bestActivationApp(in: groupApps, groupKey: key) else {
-				continue
-			}
-			guard let display = bestDisplayApp(in: groupApps, groupKey: key) else {
-				continue
-			}
-			entries.append(ListedAppEntry(displayApp: display, activationApp: activation))
-		}
-
-		entries.sort { lhs, rhs in
-			if lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedSame {
-				return lhs.activationApp.processIdentifier < rhs.activationApp.processIdentifier
-			}
-			return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
-		}
-
-		return Array(entries.prefix(maxMenuItems))
-	}
-
-	private func mergeGroupKey(for app: NSRunningApplication) -> String? {
-		let bundleID = app.bundleIdentifier?.lowercased() ?? ""
-		let appName = app.localizedName?.lowercased() ?? ""
-
-		if bundleID.contains("wechat") || bundleID.contains("tencent") || appName.contains("微信") || appName.contains("wechat") {
-			return "wechat"
-		}
-
-		if bundleID.contains("quark") || appName.contains("夸克") || appName.contains("quark") {
-			return "quark"
-		}
-
-		if bundleID.contains("uu") || appName.contains("uu") {
-			return "uu"
-		}
-
-		if bundleID.contains("v2ray") || appName.contains("v2ray") {
-			return "v2ray"
-		}
-
-		return nil
-	}
-
-	private enum AppFamily {
-		case wechat
-		case quark
-		case uu
-		case v2ray
-		case onedrive
-		case other
-	}
-
-	private func appFamily(bundleID: String?, appName: String?) -> AppFamily {
-		let bundle = bundleID?.lowercased() ?? ""
-		let name = appName?.lowercased() ?? ""
-
-		if bundle.contains("wechat") || bundle.contains("tencent") || name.contains("微信") || name.contains("wechat") {
-			return .wechat
-		}
-
-		if bundle.contains("quark") || name.contains("夸克") || name.contains("quark") {
-			return .quark
-		}
-
-		if bundle.contains("uu") || name.contains("uu") {
-			return .uu
-		}
-
-		if bundle.contains("v2ray") || name.contains("v2ray") {
-			return .v2ray
-		}
-
-		if bundle.contains("onedrive") || name.contains("onedrive") {
-			return .onedrive
-		}
-
-		return .other
-	}
-
-	private func shouldReopenForFamily(_ family: AppFamily) -> Bool {
-		switch family {
-		case .wechat, .quark, .uu, .v2ray:
-			return true
-		case .onedrive, .other:
-			return false
-		}
-	}
-
-	private func displayScore(for app: NSRunningApplication) -> Int {
-		var value = score(for: app)
-		if app.icon != nil {
-			value += 80
-		}
-		if app.activationPolicy == .regular {
-			value += 40
-		}
-		return value
-	}
-
-	private func score(for app: NSRunningApplication) -> Int {
-		var score = 0
-
-		switch app.activationPolicy {
-		case .regular:
-			score += 200
-		case .accessory:
-			score += 80
-		case .prohibited:
-			score -= 300
-		@unknown default:
-			score -= 100
-		}
-
-		let bundleID = app.bundleIdentifier?.lowercased() ?? ""
-		let name = app.localizedName?.lowercased() ?? ""
-		let bundlePath = app.bundleURL?.path.lowercased() ?? ""
-
-		if bundleID == "com.tencent.xinwechat" {
-			score += 1200
-		}
-
-		if bundleID.contains("com.tencent.flue.wechatappex") {
-			score -= 900
-		}
-
-		if helperKeywords.contains(where: { bundleID.contains($0) || name.contains($0) || bundlePath.contains($0) }) {
-			score -= 150
-		}
-
-		if bundlePath.hasSuffix(".app") {
-			score += 30
-		}
-
-		if app.isHidden {
-			score += 10
-		}
-
-		let windowCount = frontWindowCount(for: app.processIdentifier)
-		if windowCount > 0 {
-			score += 500
-		}
-
-		score += min(windowCount, 5) * 20
-
-		return score
-	}
-
-	private func bestActivationApp(in apps: [NSRunningApplication], groupKey: String) -> NSRunningApplication? {
-		if groupKey == "wechat" {
-			if let main = apps.first(where: { ($0.bundleIdentifier ?? "").lowercased() == "com.tencent.xinwechat" && !$0.isTerminated }) {
-				return main
-			}
-		}
-
-		return apps.filter { !$0.isTerminated }.max(by: { score(for: $0) < score(for: $1) })
-	}
-
-	private func bestDisplayApp(in apps: [NSRunningApplication], groupKey: String) -> NSRunningApplication? {
-		if groupKey == "wechat" {
-			if let main = apps.first(where: { ($0.bundleIdentifier ?? "").lowercased() == "com.tencent.xinwechat" && !$0.isTerminated }) {
-				return main
-			}
-		}
-
-		return apps.filter { !$0.isTerminated }.max(by: { displayScore(for: $0) < displayScore(for: $1) })
-	}
-
-
-	private func frontWindowCount(for pid: pid_t) -> Int {
-		guard let infoList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
-			return 0
-		}
-
-		let targetPid = Int(pid)
-		var count = 0
-
-		for info in infoList {
-			guard let ownerPid = info[kCGWindowOwnerPID as String] as? Int, ownerPid == targetPid else {
-				continue
-			}
-
-			if let layer = info[kCGWindowLayer as String] as? Int, layer != 0 {
-				continue
-			}
-
-			if let alpha = info[kCGWindowAlpha as String] as? Double, alpha <= 0 {
-				continue
-			}
-
-			count += 1
-		}
-
-		return count
-	}
-
-	@objc private func quitApp() {
-		NSApp.terminate(nil)
-	}
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
+    private let dynamicItemTag = 1001
+    private let emptyItemTag = 1002
+    private let settingsItemTag = 1003
+    private let maxMenuItems = 40
+
+    private var statusItem: NSStatusItem?
+    private var settingsWindow: NSWindow?
+    private var settingsScrollView: NSScrollView?
+    private var settingsListStack: NSStackView?
+    private var controlToBundleID: [Int: String] = [:]
+    private var controlTagSeed = 2000
+
+    private let visibilityStore = VisibilityStore()
+
+    private let helperKeywords = [
+        "helper", "daemon", "agent", "plugin", "service", "renderer", "crashpad", "gpu",
+        "xpc", "loginitem", "updater", "launcher", "widget", "extension"
+    ]
+    private let excludedBundleIDs = Set([
+        "com.apple.finder",
+        "com.apple.controlcenter",
+        "com.apple.systemuiserver",
+        "com.apple.notificationcenterui"
+    ])
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.title = "●"
+
+        let menu = NSMenu()
+        menu.delegate = self
+
+        let empty = NSMenuItem(title: "No running apps", action: nil, keyEquivalent: "")
+        empty.tag = emptyItemTag
+        empty.isHidden = true
+        menu.addItem(empty)
+
+        menu.addItem(.separator())
+
+        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.tag = settingsItemTag
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+
+        let quitItem = NSMenuItem(title: "Quit FrostBar", action: #selector(quitApp), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
+
+        item.menu = menu
+        statusItem = item
+
+        refreshMenuItems()
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        statusItem?.button?.title = "○"
+        refreshMenuItems()
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        statusItem?.button?.title = "●"
+    }
+
+    @objc private func openSettings() {
+        // Run after menu tracking finishes to avoid occasional no-response clicks.
+        DispatchQueue.main.async { [weak self] in
+            self?.presentSettingsWindow()
+        }
+    }
+
+    private func presentSettingsWindow() {
+        if let window = settingsWindow,
+           window.contentView != nil {
+            reloadSettingsRows()
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 540),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "FrostBar Settings"
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.center()
+
+        let root = NSStackView()
+        root.translatesAutoresizingMaskIntoConstraints = false
+        root.orientation = .vertical
+        root.alignment = .leading
+        root.spacing = 12
+
+        let intro = NSTextField(labelWithString: "Control whether each running app appears in FrostBar menu list.")
+        intro.lineBreakMode = .byWordWrapping
+        intro.maximumNumberOfLines = 0
+        intro.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        root.addArrangedSubview(intro)
+
+        let scrollView = NSScrollView()
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.hasVerticalScroller = true
+        scrollView.borderType = .bezelBorder
+        settingsScrollView = scrollView
+
+        let listStack = NSStackView()
+        listStack.translatesAutoresizingMaskIntoConstraints = false
+        listStack.orientation = .vertical
+        listStack.alignment = .leading
+        listStack.spacing = 8
+        listStack.setHuggingPriority(.required, for: .vertical)
+        listStack.setContentCompressionResistancePriority(.required, for: .vertical)
+        settingsListStack = listStack
+
+        let documentView = FlippedContainerView()
+        documentView.translatesAutoresizingMaskIntoConstraints = false
+        documentView.addSubview(listStack)
+        NSLayoutConstraint.activate([
+            listStack.topAnchor.constraint(equalTo: documentView.topAnchor, constant: 8),
+            listStack.leadingAnchor.constraint(equalTo: documentView.leadingAnchor, constant: 8),
+            listStack.trailingAnchor.constraint(equalTo: documentView.trailingAnchor, constant: -8),
+            listStack.bottomAnchor.constraint(lessThanOrEqualTo: documentView.bottomAnchor, constant: -8),
+            listStack.widthAnchor.constraint(equalTo: documentView.widthAnchor, constant: -16)
+        ])
+        scrollView.documentView = documentView
+        root.addArrangedSubview(scrollView)
+
+        let content = NSView()
+        content.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(root)
+        NSLayoutConstraint.activate([
+            root.topAnchor.constraint(equalTo: content.topAnchor, constant: 14),
+            root.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
+            root.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
+            root.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -14),
+            scrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 360)
+        ])
+
+        window.contentView = content
+        settingsWindow = window
+        reloadSettingsRows()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let win = notification.object as? NSWindow,
+              win === settingsWindow else {
+            return
+        }
+
+        // Prevent stale UI references from being reused on next Settings open.
+        settingsWindow = nil
+        settingsScrollView = nil
+        settingsListStack = nil
+        controlToBundleID.removeAll()
+    }
+
+    private func reloadSettingsRows() {
+        guard let stack = settingsListStack else {
+            return
+        }
+
+        controlToBundleID.removeAll()
+        for subview in stack.arrangedSubviews {
+            stack.removeArrangedSubview(subview)
+            subview.removeFromSuperview()
+        }
+
+        let entries = discoverRunningApps()
+        if entries.isEmpty {
+            stack.addArrangedSubview(NSTextField(labelWithString: "No running apps"))
+            return
+        }
+
+        for entry in entries {
+            stack.addArrangedSubview(makeSettingsRow(for: entry))
+        }
+
+        scrollSettingsToTop()
+    }
+
+    private func scrollSettingsToTop() {
+        guard let scrollView = settingsScrollView else {
+            return
+        }
+
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: 0))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
+    private func makeSettingsRow(for entry: ListedAppEntry) -> NSView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 8
+
+        let iconHolder = NSView(frame: NSRect(x: 0, y: 0, width: 16, height: 16))
+        iconHolder.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            iconHolder.widthAnchor.constraint(equalToConstant: 16),
+            iconHolder.heightAnchor.constraint(equalToConstant: 16)
+        ])
+        if let icon = entry.icon {
+            let iconView = NSImageView()
+            let sizedIcon = icon.copy() as? NSImage ?? icon
+            sizedIcon.size = NSSize(width: 14, height: 14)
+            iconView.image = sizedIcon
+            iconView.translatesAutoresizingMaskIntoConstraints = false
+            iconHolder.addSubview(iconView)
+            NSLayoutConstraint.activate([
+                iconView.centerXAnchor.constraint(equalTo: iconHolder.centerXAnchor),
+                iconView.centerYAnchor.constraint(equalTo: iconHolder.centerYAnchor),
+                iconView.widthAnchor.constraint(equalToConstant: 14),
+                iconView.heightAnchor.constraint(equalToConstant: 14)
+            ])
+        }
+        row.addArrangedSubview(iconHolder)
+
+        let name = NSTextField(labelWithString: entry.displayName)
+        name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        name.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        row.addArrangedSubview(name)
+
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        row.addArrangedSubview(spacer)
+
+        let checkbox = NSButton(checkboxWithTitle: "", target: self, action: #selector(toggleVisibility(_:)))
+        checkbox.controlSize = .small
+        checkbox.state = visibilityStore.isVisible(bundleID: entry.bundleID) ? .on : .off
+        controlTagSeed += 1
+        checkbox.tag = controlTagSeed
+        controlToBundleID[checkbox.tag] = entry.bundleID
+
+        let toggleLabel = NSTextField(labelWithString: "Show in list")
+        toggleLabel.alignment = .left
+        let toggleStack = NSStackView(views: [checkbox, toggleLabel])
+        toggleStack.orientation = .horizontal
+        toggleStack.alignment = .centerY
+        toggleStack.spacing = 4
+        toggleStack.setContentHuggingPriority(.required, for: .horizontal)
+        toggleStack.setContentCompressionResistancePriority(.required, for: .horizontal)
+        row.addArrangedSubview(toggleStack)
+
+        return row
+    }
+
+    @objc private func toggleVisibility(_ sender: NSButton) {
+        guard let bundleID = controlToBundleID[sender.tag] else {
+            return
+        }
+
+        visibilityStore.setVisible(sender.state == .on, for: bundleID)
+        refreshMenuItems()
+        reloadSettingsRows()
+    }
+
+    private func refreshMenuItems() {
+        guard let menu = statusItem?.menu else {
+            return
+        }
+
+        removeDynamicMenuItems(from: menu)
+
+        let hidden = visibilityStore.hiddenBundleIDs()
+        let visibleEntries = discoverRunningApps().filter { !hidden.contains($0.bundleID) }
+
+        if visibleEntries.isEmpty {
+            menu.item(withTag: emptyItemTag)?.isHidden = false
+            return
+        }
+
+        menu.item(withTag: emptyItemTag)?.isHidden = true
+
+        for (offset, entry) in visibleEntries.enumerated() {
+            let item = NSMenuItem(title: entry.displayName, action: #selector(openAppWindow(_:)), keyEquivalent: "")
+            item.tag = dynamicItemTag
+            item.target = self
+            item.image = entry.icon
+            item.representedObject = AppActivationTarget(app: entry.app, bundleID: entry.bundleID)
+            menu.insertItem(item, at: offset)
+        }
+    }
+
+    @objc private func openAppWindow(_ sender: NSMenuItem) {
+        guard let target = sender.representedObject as? AppActivationTarget else {
+            return
+        }
+
+        let family = appFamily(bundleID: target.bundleID)
+        let candidates = NSRunningApplication.runningApplications(withBundleIdentifier: target.bundleID)
+            .filter { !$0.isTerminated }
+
+        let best = pickBestActivationCandidate(from: candidates, preferredPID: target.pid)
+
+        if let best, activateRunningApp(app: best), visibleWindowCount(for: best.processIdentifier) > 0 {
+            return
+        }
+
+        if activateRunningApp(pid: target.pid),
+           let preferred = NSRunningApplication(processIdentifier: target.pid),
+           visibleWindowCount(for: preferred.processIdentifier) > 0 {
+            return
+        }
+
+        _ = activateByAppleScript(bundleID: target.bundleID)
+        _ = activateByAppleScript(appName: target.appName)
+
+        if shouldReopenAfterActivate(family) || candidates.isEmpty || candidates.contains(where: { visibleWindowCount(for: $0.processIdentifier) == 0 }) {
+            _ = reopenByAppleScript(bundleID: target.bundleID)
+            _ = reopenByAppleScript(appName: target.appName)
+        }
+
+        if let bundleURL = target.bundleURL {
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            NSWorkspace.shared.openApplication(at: bundleURL, configuration: config) { _, _ in }
+        } else if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: target.bundleID) {
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            NSWorkspace.shared.openApplication(at: appURL, configuration: config) { _, _ in }
+        }
+    }
+
+    private func pickBestActivationCandidate(from apps: [NSRunningApplication], preferredPID: pid_t) -> NSRunningApplication? {
+        guard !apps.isEmpty else {
+            return nil
+        }
+
+        return apps.max { lhs, rhs in
+            activationRank(lhs, preferredPID: preferredPID) < activationRank(rhs, preferredPID: preferredPID)
+        }
+    }
+
+    private func activationRank(_ app: NSRunningApplication, preferredPID: pid_t) -> Int {
+        var score = 0
+        if app.processIdentifier == preferredPID { score += 1000 }
+        if app.activationPolicy == .regular { score += 200 }
+        if !app.isHidden { score += 30 }
+        score += min(visibleWindowCount(for: app.processIdentifier), 5) * 60
+        return score
+    }
+
+    private enum AppFamily {
+        case quark
+        case wechat
+        case other
+    }
+
+    private func appFamily(bundleID: String) -> AppFamily {
+        let lower = bundleID.lowercased()
+        if lower.contains("quark") {
+            return .quark
+        }
+        if lower.contains("wechat") || lower.contains("tencent") {
+            return .wechat
+        }
+        return .other
+    }
+
+    private func shouldReopenAfterActivate(_ family: AppFamily) -> Bool {
+        switch family {
+        case .quark, .wechat:
+            return true
+        case .other:
+            return false
+        }
+    }
+
+    private func activateByAppleScript(bundleID: String) -> Bool {
+        runAppleScript("tell application id \"\(bundleID)\" to activate")
+    }
+
+    private func activateByAppleScript(appName: String) -> Bool {
+        runAppleScript("tell application \"\(appName)\" to activate")
+    }
+
+    private func reopenByAppleScript(bundleID: String) -> Bool {
+        runAppleScript("tell application id \"\(bundleID)\" to reopen")
+    }
+
+    private func reopenByAppleScript(appName: String) -> Bool {
+        runAppleScript("tell application \"\(appName)\" to reopen")
+    }
+
+    private func runAppleScript(_ source: String) -> Bool {
+        var errorInfo: NSDictionary?
+        let script = NSAppleScript(source: source)
+        _ = script?.executeAndReturnError(&errorInfo)
+        return errorInfo == nil
+    }
+
+    private func activateRunningApp(pid: pid_t) -> Bool {
+        guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else {
+            return false
+        }
+
+        return activateRunningApp(app: app)
+    }
+
+    private func activateRunningApp(app: NSRunningApplication) -> Bool {
+        guard !app.isTerminated else {
+            return false
+        }
+
+        app.unhide()
+        if #available(macOS 14.0, *) {
+            if app.activate(options: [.activateAllWindows]) {
+                return true
+            }
+        } else {
+            if app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps]) {
+                return true
+            }
+        }
+
+        if app.activate(options: [.activateAllWindows]) {
+            return true
+        }
+        return app.activate(options: [])
+    }
+
+    private func bestRunningApp(bundleID: String, preferredPID: pid_t) -> NSRunningApplication? {
+        let candidates = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .filter { !$0.isTerminated }
+
+        guard !candidates.isEmpty else {
+            return nil
+        }
+
+        return candidates.max { lhs, rhs in
+            runningAppRank(lhs, preferredPID: preferredPID) < runningAppRank(rhs, preferredPID: preferredPID)
+        }
+    }
+
+    private func runningAppRank(_ app: NSRunningApplication, preferredPID: pid_t) -> Int {
+        activationRank(app, preferredPID: preferredPID)
+    }
+
+    private func visibleWindowCount(for pid: pid_t) -> Int {
+        guard let infoList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return 0
+        }
+
+        var count = 0
+        let target = Int(pid)
+        for info in infoList {
+            guard let ownerPID = info[kCGWindowOwnerPID as String] as? Int, ownerPID == target else {
+                continue
+            }
+            if let layer = info[kCGWindowLayer as String] as? Int, layer != 0 {
+                continue
+            }
+            if let alpha = info[kCGWindowAlpha as String] as? Double, alpha <= 0 {
+                continue
+            }
+            count += 1
+        }
+
+        return count
+    }
+
+    private func discoverRunningApps() -> [ListedAppEntry] {
+        let running = NSWorkspace.shared.runningApplications.filter { app in
+            guard !app.isTerminated else { return false }
+            guard let bundleID = app.bundleIdentifier?.lowercased(), !bundleID.isEmpty else { return false }
+            guard app.bundleIdentifier != Bundle.main.bundleIdentifier else { return false }
+            guard app.localizedName != nil else { return false }
+
+            let name = app.localizedName?.lowercased() ?? ""
+            if excludedBundleIDs.contains(bundleID) { return false }
+            if helperKeywords.contains(where: { bundleID.contains($0) || name.contains($0) }) { return false }
+
+            // Keep list focused on user-facing desktop apps.
+            return app.activationPolicy == .regular
+        }
+
+        var bestByBundleID: [String: NSRunningApplication] = [:]
+        for app in running {
+            guard let bundleID = app.bundleIdentifier else {
+                continue
+            }
+
+            if let current = bestByBundleID[bundleID] {
+                if appScore(app) > appScore(current) {
+                    bestByBundleID[bundleID] = app
+                }
+            } else {
+                bestByBundleID[bundleID] = app
+            }
+        }
+
+        let entries = bestByBundleID.compactMap { (bundleID, app) -> ListedAppEntry? in
+            let name = app.localizedName ?? bundleID
+            let iconCopy = app.icon?.copy() as? NSImage
+            iconCopy?.size = NSSize(width: 16, height: 16)
+            return ListedAppEntry(app: app, displayName: name, bundleID: bundleID, icon: iconCopy)
+        }
+
+        return entries
+            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+            .prefix(maxMenuItems)
+            .map { $0 }
+    }
+
+    private func appScore(_ app: NSRunningApplication) -> Int {
+        var score = 0
+        if app.activationPolicy == .regular { score += 100 }
+        if !app.isHidden { score += 10 }
+        if app.icon != nil { score += 5 }
+        score += min(visibleWindowCount(for: app.processIdentifier), 5) * 30
+        return score
+    }
+
+    private func removeDynamicMenuItems(from menu: NSMenu) {
+        for item in menu.items.reversed() where item.tag == dynamicItemTag {
+            menu.removeItem(item)
+        }
+    }
+
+    @objc private func quitApp() {
+        NSApp.terminate(nil)
+    }
 }
 
 let app = NSApplication.shared
 let delegate = AppDelegate()
-
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
 app.run()

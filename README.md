@@ -1,78 +1,72 @@
 # FrostBar
 
-FrostBar is a macOS menu bar item manager built from scratch with a hybrid architecture:
+FrostBar is a lightweight macOS menu bar app for quick app switching.
 
-- Swift/AppKit shell for UI and macOS system integration
-- Objective-C++ bridge for cross-language boundaries
-- C++ core for layout rules, policies, and testable business logic
+## Current behavior
 
-## Current status
+1. Click FrostBar in the menu bar to see currently running regular desktop apps.
+2. Open FrostBar Settings to choose which apps are shown or hidden in that list.
+3. Click an app in the FrostBar list to bring its window to front.
 
-- C++ core layout engine scaffold is implemented and buildable.
-- Objective-C++ bridge API scaffold is implemented.
-- Swift shell is currently a placeholder entry point.
-- This repository is in scaffold stage, not feature-complete MVP.
+## UI details
 
-## Why hybrid instead of pure C++
+- Menu bar indicator:
+	- Closed state: solid circle.
+	- Open state: hollow circle.
+- Settings rows are aligned as:
+	- icon + app name + checkbox + "Show in list".
+- App icon uses `FrostBar.jpeg` converted to `FrostBar.icns` during packaging.
 
-On macOS, menu bar APIs, event taps, permissions, and runtime integration are native to AppKit and Objective-C runtime. A pure C++ implementation is not practical for full product behavior. Hybrid keeps platform integration robust while preserving C++ where it adds the most value.
+## Screenshots
+
+### MenuBar
+
+![MenuBar macOS menubar style](Figures/Menu%20Bar.png)
+
+### FrostBar
+
+![FrostBar dropdown after clicking the menu icon](Figures/FrostBar.png)
+
+### Setting
+
+![Settings panel](Figures/Settings.png)
+
+## DMG install layout
+
+The installer DMG is configured for drag-and-drop install:
+
+- Left: `FrostBar.app`
+- Right: `Applications`
 
 ## Project layout
 
-- `app-swift`: Swift app shell and menu bar interaction
-- `bridge-objcxx`: Objective-C++ bridge between Swift and C++
-- `core-cpp`: Pure C++ domain logic
-- `docs`: Architecture and implementation notes
-- `scripts`: Setup scripts
+- `app-swift/Sources/App/main.swift`
+	- Menu bar UI, app discovery, activation, and settings window.
+- `app-swift/Sources/App/VisibilityStore.swift`
+	- Hidden app persistence model used by tests.
+- `tests/visibility_store_test.swift`
+	- Logic tests for hidden/show settings behavior.
+- `scripts/package_and_test.sh`
+	- One command for test + build + sign + package + DMG verification.
 
-## Quick start
+## Build, test, and package
 
-1. Configure and build core:
+Run:
 
-```sh
-cmake -S . -B build
-cmake --build build
+```bash
+bash scripts/package_and_test.sh
 ```
 
-1. Run tests:
+Pipeline steps:
 
-```sh
-ctest --test-dir build --output-on-failure
-```
+1. Run logic tests.
+2. Build Swift app executable.
+3. Assemble `.app` bundle.
+4. Convert icon and write app metadata.
+5. Code sign app.
+6. Create DMG with Finder layout.
+7. Verify DMG by mounting and checking bundle contents.
 
-1. Optional: run scaffold bootstrap script only when you want it to auto-create an initial commit in a fresh clone:
+Final artifact:
 
-```sh
-bash scripts/bootstrap.sh
-```
-
-Note: the bootstrap script runs git add . and may create a commit automatically.
-
-## Minimal app preview and DMG
-
-1. Build a minimal menu bar app bundle:
-
-```sh
-bash scripts/build_app.sh
-```
-
-1. Package a DMG from the generated app:
-
-```sh
-bash scripts/package_dmg.sh
-```
-
-1. Run preview app:
-
-```sh
-open build/app/FrostBar.app
-```
-
-## Scope for MVP
-
-- Discover and represent menu bar item metadata
-- Define visibility/layout rules in C++
-- Apply hide/show through macOS shell layer
-- Revert state safely when app exits
-
-See `TASKS.md` for phased implementation tasks.
+- `dist/FrostBar.dmg`
