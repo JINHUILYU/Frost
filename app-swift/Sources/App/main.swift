@@ -72,6 +72,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         "helper", "daemon", "agent", "plugin", "service", "renderer", "crashpad", "gpu",
         "xpc", "loginitem", "updater", "launcher", "widget", "extension"
     ]
+    private let accessoryAllowKeywords = [
+        "uu", "quark", "v2ray", "wechat", "tencent"
+    ]
     private let excludedBundleIDs = Set([
         "com.apple.finder",
         "com.apple.controlcenter",
@@ -532,8 +535,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             if excludedBundleIDs.contains(bundleID) { return false }
             if helperKeywords.contains(where: { bundleID.contains($0) || name.contains($0) }) { return false }
 
-            // Keep list focused on user-facing desktop apps.
-            return app.activationPolicy == .regular
+            // Regular apps are always listed.
+            if app.activationPolicy == .regular {
+                return true
+            }
+
+            // Accessory apps are listed only when they are usable:
+            // either a visible window exists, or they match known tray-app keywords.
+            if app.activationPolicy == .accessory {
+                if visibleWindowCount(for: app.processIdentifier) > 0 {
+                    return true
+                }
+                if accessoryAllowKeywords.contains(where: { bundleID.contains($0) || name.contains($0) }) {
+                    return true
+                }
+            }
+
+            return false
         }
 
         var bestByBundleID: [String: NSRunningApplication] = [:]

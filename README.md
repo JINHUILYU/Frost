@@ -4,7 +4,9 @@ FrostBar is a lightweight macOS menu bar app for quick app switching.
 
 ## Current behavior
 
-1. Click FrostBar in the menu bar to see currently running regular desktop apps.
+1. Click FrostBar in the menu bar to see currently running apps using `regular + usable accessory` mode:
+	- all regular desktop apps,
+	- plus accessory apps that are usable (has visible window or matches allow keywords such as `uu`, `quark`, `v2ray`, `wechat`, `tencent`).
 2. Open FrostBar Settings to choose which apps are shown or hidden in that list.
 3. Click an app in the FrostBar list to bring its window to front.
 
