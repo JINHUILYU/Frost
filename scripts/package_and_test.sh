@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="FrostBar"
-APP_BUNDLE_ID="com.frostbar.app"
+APP_NAME="Frost"
+APP_BUNDLE_ID="com.frost.app"
 BUILD_DIR="$ROOT_DIR/build"
 APP_DIR="$BUILD_DIR/app/$APP_NAME.app"
 BIN_DIR="$APP_DIR/Contents/MacOS"
@@ -48,7 +48,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <key>CFBundleDisplayName</key>
     <string>$APP_NAME</string>
     <key>CFBundleIconFile</key>
-    <string>FrostBar.icns</string>
+    <string>Frost.icns</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -65,29 +65,29 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-if [[ -f "$ROOT_DIR/FrostBar.jpeg" ]]; then
-  cp "$ROOT_DIR/FrostBar.jpeg" "$RES_DIR/FrostBar.jpeg"
+if [[ -f "$ROOT_DIR/Frost.jpeg" ]]; then
+  cp "$ROOT_DIR/Frost.jpeg" "$RES_DIR/Frost.jpeg"
 
-  ICONSET_DIR="$BUILD_DIR/FrostBar.iconset"
+  ICONSET_DIR="$BUILD_DIR/Frost.iconset"
   if [[ -d "$ICONSET_DIR" ]]; then
     ts="$(date +%Y%m%d-%H%M%S)"
     mkdir -p "$ROOT_DIR/delete"
-    mv "$ICONSET_DIR" "$ROOT_DIR/delete/FrostBar-iconset-prev-$ts"
+    mv "$ICONSET_DIR" "$ROOT_DIR/delete/Frost-iconset-prev-$ts"
   fi
   mkdir -p "$ICONSET_DIR"
 
-  sips -s format png -z 16 16 "$ROOT_DIR/FrostBar.jpeg" --out "$ICONSET_DIR/icon_16x16.png" >/dev/null
-  sips -s format png -z 32 32 "$ROOT_DIR/FrostBar.jpeg" --out "$ICONSET_DIR/icon_16x16@2x.png" >/dev/null
-  sips -s format png -z 32 32 "$ROOT_DIR/FrostBar.jpeg" --out "$ICONSET_DIR/icon_32x32.png" >/dev/null
-  sips -s format png -z 64 64 "$ROOT_DIR/FrostBar.jpeg" --out "$ICONSET_DIR/icon_32x32@2x.png" >/dev/null
-  sips -s format png -z 128 128 "$ROOT_DIR/FrostBar.jpeg" --out "$ICONSET_DIR/icon_128x128.png" >/dev/null
-  sips -s format png -z 256 256 "$ROOT_DIR/FrostBar.jpeg" --out "$ICONSET_DIR/icon_128x128@2x.png" >/dev/null
-  sips -s format png -z 256 256 "$ROOT_DIR/FrostBar.jpeg" --out "$ICONSET_DIR/icon_256x256.png" >/dev/null
-  sips -s format png -z 512 512 "$ROOT_DIR/FrostBar.jpeg" --out "$ICONSET_DIR/icon_256x256@2x.png" >/dev/null
-  sips -s format png -z 512 512 "$ROOT_DIR/FrostBar.jpeg" --out "$ICONSET_DIR/icon_512x512.png" >/dev/null
-  sips -s format png -z 1024 1024 "$ROOT_DIR/FrostBar.jpeg" --out "$ICONSET_DIR/icon_512x512@2x.png" >/dev/null
+  sips -s format png -z 16 16 "$ROOT_DIR/Frost.jpeg" --out "$ICONSET_DIR/icon_16x16.png" >/dev/null
+  sips -s format png -z 32 32 "$ROOT_DIR/Frost.jpeg" --out "$ICONSET_DIR/icon_16x16@2x.png" >/dev/null
+  sips -s format png -z 32 32 "$ROOT_DIR/Frost.jpeg" --out "$ICONSET_DIR/icon_32x32.png" >/dev/null
+  sips -s format png -z 64 64 "$ROOT_DIR/Frost.jpeg" --out "$ICONSET_DIR/icon_32x32@2x.png" >/dev/null
+  sips -s format png -z 128 128 "$ROOT_DIR/Frost.jpeg" --out "$ICONSET_DIR/icon_128x128.png" >/dev/null
+  sips -s format png -z 256 256 "$ROOT_DIR/Frost.jpeg" --out "$ICONSET_DIR/icon_128x128@2x.png" >/dev/null
+  sips -s format png -z 256 256 "$ROOT_DIR/Frost.jpeg" --out "$ICONSET_DIR/icon_256x256.png" >/dev/null
+  sips -s format png -z 512 512 "$ROOT_DIR/Frost.jpeg" --out "$ICONSET_DIR/icon_256x256@2x.png" >/dev/null
+  sips -s format png -z 512 512 "$ROOT_DIR/Frost.jpeg" --out "$ICONSET_DIR/icon_512x512.png" >/dev/null
+  sips -s format png -z 1024 1024 "$ROOT_DIR/Frost.jpeg" --out "$ICONSET_DIR/icon_512x512@2x.png" >/dev/null
 
-  iconutil -c icns "$ICONSET_DIR" -o "$RES_DIR/FrostBar.icns"
+  iconutil -c icns "$ICONSET_DIR" -o "$RES_DIR/Frost.icns"
 fi
 
 printf '\n[4/6] Signing app...\n'
@@ -146,7 +146,7 @@ hdiutil detach "$MOUNT_POINT" >/dev/null
 hdiutil convert "$RW_DMG_PATH" -ov -format UDZO -imagekey zlib-level=9 -o "$DIST_DIR/$APP_NAME" >/dev/null
 
 printf '\n[6/6] Verifying package...\n'
-TMP_MOUNT="$(mktemp -d /tmp/frostbar-mount.XXXXXX)"
+TMP_MOUNT="$(mktemp -d /tmp/frost-mount.XXXXXX)"
 hdiutil mount "$DMG_PATH" -mountpoint "$TMP_MOUNT" >/dev/null
 [[ -d "$TMP_MOUNT/$APP_NAME.app" ]] || { echo "DMG verification failed: app missing"; exit 1; }
 [[ -x "$TMP_MOUNT/$APP_NAME.app/Contents/MacOS/$APP_NAME" ]] || { echo "DMG verification failed: executable missing"; exit 1; }
