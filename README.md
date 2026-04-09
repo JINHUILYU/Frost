@@ -1,14 +1,14 @@
-# FrostBar
+# Frost
 
-FrostBar is a lightweight macOS menu bar app for quick app switching.
+Frost is a lightweight macOS menu bar app for quick app switching.
 
 ## Current behavior
 
-1. Click FrostBar in the menu bar to see currently running apps using `regular + usable accessory` mode:
+1. Click Frost in the menu bar to see currently running apps using `regular + usable accessory` mode:
 	- all regular desktop apps,
 	- plus accessory apps that are usable (has visible window or matches allow keywords such as `uu`, `quark`, `v2ray`, `wechat`, `tencent`).
-2. Open FrostBar Settings to choose which apps are shown or hidden in that list.
-3. Click an app in the FrostBar list to bring its window to front.
+2. Open Frost Settings to choose which apps are shown or hidden in that list.
+3. Click an app in the Frost list to bring its window to front.
 
 ## UI details
 
@@ -17,7 +17,7 @@ FrostBar is a lightweight macOS menu bar app for quick app switching.
 	- Open state: hollow circle.
 - Settings rows are aligned as:
 	- icon + app name + checkbox + "Show in list".
-- App icon uses `FrostBar.jpeg` converted to `FrostBar.icns` during packaging.
+- App icon uses `Frost.jpeg` converted to `Frost.icns` during packaging.
 
 ## Screenshots
 
@@ -25,9 +25,9 @@ FrostBar is a lightweight macOS menu bar app for quick app switching.
 
 ![MenuBar macOS menubar style](Figures/Menu%20Bar.png)
 
-### FrostBar
+### Frost
 
-![FrostBar dropdown after clicking the menu icon](Figures/FrostBar.png)
+![Frost dropdown after clicking the menu icon](Figures/Frost.png)
 
 ### Setting
 
@@ -37,7 +37,7 @@ FrostBar is a lightweight macOS menu bar app for quick app switching.
 
 The installer DMG is configured for drag-and-drop install:
 
-- Left: `FrostBar.app`
+- Left: `Frost.app`
 - Right: `Applications`
 
 ## Project layout
@@ -71,4 +71,4 @@ Pipeline steps:
 
 Final artifact:
 
-- `dist/FrostBar.dmg`
+- `dist/Frost.dmg`
