@@ -5,7 +5,7 @@ final class FlippedContainerView: NSView {
 }
 
 final class VisibilityStore {
-    private let hiddenBundleDefaultsKey = "FrostBar.HiddenBundleIDs"
+    private let hiddenBundleDefaultsKey = "Frost.HiddenBundleIDs"
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -101,7 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         settingsItem.target = self
         menu.addItem(settingsItem)
 
-        let quitItem = NSMenuItem(title: "Quit FrostBar", action: #selector(quitApp), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Quit Frost", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -142,7 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             backing: .buffered,
             defer: false
         )
-        window.title = "FrostBar Settings"
+        window.title = "Frost Settings"
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.center()
@@ -153,7 +153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         root.alignment = .leading
         root.spacing = 12
 
-        let intro = NSTextField(labelWithString: "Control whether each running app appears in FrostBar menu list.")
+        let intro = NSTextField(labelWithString: "Control whether each running app appears in Frost menu list.")
         intro.lineBreakMode = .byWordWrapping
         intro.maximumNumberOfLines = 0
         intro.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)

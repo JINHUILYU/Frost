@@ -13,7 +13,7 @@ func assert(_ condition: @autoclosure () -> Bool, _ message: String) -> Bool {
 @main
 struct VisibilityStoreTests {
     static func main() {
-        let suiteName = "FrostBar.VisibilityStoreTests.\(UUID().uuidString)"
+        let suiteName = "Frost.VisibilityStoreTests.\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {
             fputs("FAIL: cannot create UserDefaults suite\n", stderr)
             exit(1)

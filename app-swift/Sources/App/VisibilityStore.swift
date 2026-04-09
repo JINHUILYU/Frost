@@ -1,7 +1,7 @@
 import Foundation
 
 final class VisibilityStore {
-    private let hiddenBundleDefaultsKey = "FrostBar.HiddenBundleIDs"
+    private let hiddenBundleDefaultsKey = "Frost.HiddenBundleIDs"
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
