@@ -81,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         "com.apple.systemuiserver",
         "com.apple.notificationcenterui"
     ])
+    private let activationCheckDelay: TimeInterval = 0.15
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -356,25 +357,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             .filter { !$0.isTerminated }
 
         let best = pickBestActivationCandidate(from: candidates, preferredPID: target.pid)
+        let preferredPID = best?.processIdentifier ?? target.pid
 
-        if let best, activateRunningApp(app: best), visibleWindowCount(for: best.processIdentifier) > 0 {
+        if let best, activateRunningApp(app: best) {
+            continueActivationFlow(target: target, family: family, preferredPID: preferredPID)
             return
         }
 
-        if activateRunningApp(pid: target.pid),
-           let preferred = NSRunningApplication(processIdentifier: target.pid),
-           visibleWindowCount(for: preferred.processIdentifier) > 0 {
+        if activateRunningApp(pid: target.pid) {
+            continueActivationFlow(target: target, family: family, preferredPID: preferredPID)
             return
         }
 
         _ = activateByAppleScript(bundleID: target.bundleID)
-        _ = activateByAppleScript(appName: target.appName)
+        continueActivationFlow(target: target, family: family, preferredPID: preferredPID)
+    }
 
-        if shouldReopenAfterActivate(family) || candidates.isEmpty || candidates.contains(where: { visibleWindowCount(for: $0.processIdentifier) == 0 }) {
-            _ = reopenByAppleScript(bundleID: target.bundleID)
-            _ = reopenByAppleScript(appName: target.appName)
+    private func continueActivationFlow(target: AppActivationTarget, family: AppFamily, preferredPID: pid_t) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + activationCheckDelay) { [weak self] in
+            guard let self else {
+                return
+            }
+
+            let running = NSRunningApplication.runningApplications(withBundleIdentifier: target.bundleID)
+                .filter { !$0.isTerminated }
+            let visibleWindowPIDs = self.visibleWindowOwnerPIDs()
+            if self.hasVisibleWindow(for: preferredPID, visibleWindowPIDs: visibleWindowPIDs) ||
+                self.hasVisibleWindow(in: running, visibleWindowPIDs: visibleWindowPIDs) {
+                return
+            }
+
+            if self.shouldReopenAfterActivate(family), !running.isEmpty {
+                _ = self.reopenByAppleScript(bundleID: target.bundleID)
+                DispatchQueue.main.asyncAfter(deadline: .now() + self.activationCheckDelay) { [weak self] in
+                    guard let self else {
+                        return
+                    }
+
+                    let refreshedRunning = NSRunningApplication.runningApplications(withBundleIdentifier: target.bundleID)
+                        .filter { !$0.isTerminated }
+                    let refreshedVisiblePIDs = self.visibleWindowOwnerPIDs()
+                    if self.hasVisibleWindow(for: preferredPID, visibleWindowPIDs: refreshedVisiblePIDs) ||
+                        self.hasVisibleWindow(in: refreshedRunning, visibleWindowPIDs: refreshedVisiblePIDs) {
+                        return
+                    }
+
+                    self.openApplication(target)
+                }
+                return
+            }
+
+            self.openApplication(target)
         }
+    }
 
+    private func openApplication(_ target: AppActivationTarget) {
         if let bundleURL = target.bundleURL {
             let config = NSWorkspace.OpenConfiguration()
             config.activates = true
@@ -384,6 +421,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             config.activates = true
             NSWorkspace.shared.openApplication(at: appURL, configuration: config) { _, _ in }
         }
+    }
+
+    private func hasVisibleWindow(for pid: pid_t, visibleWindowPIDs: Set<Int>) -> Bool {
+        visibleWindowPIDs.contains(Int(pid))
+    }
+
+    private func hasVisibleWindow(in apps: [NSRunningApplication], visibleWindowPIDs: Set<Int>) -> Bool {
+        apps.contains { hasVisibleWindow(for: $0.processIdentifier, visibleWindowPIDs: visibleWindowPIDs) }
     }
 
     private func pickBestActivationCandidate(from apps: [NSRunningApplication], preferredPID: pid_t) -> NSRunningApplication? {
@@ -522,6 +567,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
 
         return count
+    }
+
+    private func visibleWindowOwnerPIDs() -> Set<Int> {
+        guard let infoList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return []
+        }
+
+        var owners = Set<Int>()
+        for info in infoList {
+            guard let ownerPID = info[kCGWindowOwnerPID as String] as? Int else {
+                continue
+            }
+            if let layer = info[kCGWindowLayer as String] as? Int, layer != 0 {
+                continue
+            }
+            if let alpha = info[kCGWindowAlpha as String] as? Double, alpha <= 0 {
+                continue
+            }
+            owners.insert(ownerPID)
+        }
+
+        return owners
     }
 
     private func discoverRunningApps() -> [ListedAppEntry] {
